@@ -114,6 +114,13 @@ static inline int atomic_sub(atomic_t *atomic, int val)
 			val, memory_order_acq_rel) - 1;
 }
 
+static inline int atomic_compare_swap(atomic_t *atomic, int oldval, int newval)
+{
+	ATOMIC_IS_INITIALIZED(atomic);
+	atomic_compare_exchange_weak(atomic, &oldval, newval);
+	return oldval;
+}
+
 #else
 
 typedef struct {
@@ -191,6 +198,19 @@ static inline int atomic_sub(atomic_t *atomic, int val)
 	fastlock_acquire(&atomic->lock);
 	atomic->val -= val;
 	v = atomic->val;
+	fastlock_release(&atomic->lock);
+	return v;
+}
+
+static inline int atomic_compare_swap(atomic_t *atomic, int oldval, int newval)
+{
+	int v;
+
+	ATOMIC_IS_INITIALIZED(atomic);
+	fastlock_acquire(&atomic->lock);
+	v = atomic->val;
+	if (v == oldval)
+		atomic->val = newval;
 	fastlock_release(&atomic->lock);
 	return v;
 }
