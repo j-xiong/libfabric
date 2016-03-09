@@ -158,7 +158,8 @@ enum {
 	FI_SOCKADDR_IN6,	/* struct sockaddr_in6 */
 	FI_SOCKADDR_IB,		/* struct sockaddr_ib */
 	FI_ADDR_PSMX,		/* uint64_t */
-	FI_ADDR_GNI
+	FI_ADDR_GNI,
+	FI_ADDR_STRING,		/* char * ("node:service") */
 };
 
 #define FI_ADDR_UNSPEC		((uint64_t) -1)
@@ -238,7 +239,8 @@ enum {
 	FI_PROTO_IB_RDM,
 	FI_PROTO_GNI,
 	FI_PROTO_RXM,
-	FI_PROTO_RXD
+	FI_PROTO_RXD,
+	FI_PROTO_SHM,
 };
 
 /* Mode bits */
