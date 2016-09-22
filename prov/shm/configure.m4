@@ -11,6 +11,7 @@ AC_DEFUN([FI_SHM_CONFIGURE],[
 	# Determine if we can support the shm provider
 	shm_happy=0
 	AS_IF([test x"$enable_shm" != x"no"],
+	      [
 	       # check if shm_open is present
 	       AC_CHECK_FUNC([shm_open],
 			     [shm_happy=1],
