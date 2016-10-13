@@ -40,9 +40,9 @@ static struct fi_ops_fabric smr_fabric_ops = {
 	.size = sizeof(struct fi_ops_fabric),
 	.domain = smr_domain_open,
 	.passive_ep = fi_no_passive_ep,
-	.eq_open = fi_eq_create,
-	.wait_open = fi_wait_fd_open,
-	.trywait = util_trywait
+	.eq_open = ofi_eq_create,
+	.wait_open = ofi_wait_fd_open,
+	.trywait = ofi_trywait
 };
 
 static int smr_fabric_close(fid_t fid)
@@ -50,7 +50,7 @@ static int smr_fabric_close(fid_t fid)
 	int ret;
 	struct util_fabric *fabric;
 	fabric = container_of(fid, struct util_fabric, fabric_fid.fid);
-	ret = util_fabric_close(fabric);
+	ret = ofi_fabric_close(fabric);
 	if (ret)
 		return ret;
 	free(fabric);
@@ -75,8 +75,8 @@ int smr_fabric(struct fi_fabric_attr *attr, struct fid_fabric **fabric,
 	if (!util_fabric)
 		return -FI_ENOMEM;
 
-	ret = fi_fabric_init(&smr_prov, smr_info.fabric_attr, attr,
-			     util_fabric, context);
+	ret = ofi_fabric_init(&smr_prov, smr_info.fabric_attr, attr,
+			      util_fabric, context, FI_MATCH_EXACT);
 	if (ret)
 		return ret;
 

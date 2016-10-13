@@ -36,13 +36,30 @@
 #include "smr.h"
 
 
+void smr_cq_progress(struct util_cq *cq)
+{
+	return;
+}
+
 int smr_cq_open(struct fid_domain *domain, struct fi_cq_attr *attr,
 		struct fid_cq **cq_fid, void *context)
 {
+	struct util_cq *util_cq;
+	int ret;
+
 	if (attr->wait_obj != FI_WAIT_NONE) {
 		FI_INFO(&smr_prov, FI_LOG_CQ, "CQ wait not yet supported\n");
 		return -FI_ENOSYS;
 	}
 
-	return util_cq_open(&smr_prov, domain, attr, cq_fid, context);
+	util_cq = calloc(1, sizeof(*util_cq));
+	if (!util_cq)
+		return -FI_ENOMEM;
+
+	ret = ofi_cq_init(&smr_prov, domain, attr, util_cq, smr_cq_progress, context);
+	if (ret)
+		return ret;
+
+	(*cq_fid) = &util_cq->cq_fid;
+	return 0;
 }

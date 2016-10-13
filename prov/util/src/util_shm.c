@@ -45,7 +45,7 @@
 
 /* TODO: Determine if aligning SMR data helps performance */
 int smr_create(const struct fi_provider *prov,
-	       const struct smr_attr *attr, struct shm_region **smr)
+	       const struct smr_attr *attr, struct smr_region **smr)
 {
 	size_t total_size, peer_offset, cmd_queue_offset, tx_ctx_offset;
 	size_t resp_queue_offset, inject_pool_offset, name_offset;
@@ -53,7 +53,7 @@ int smr_create(const struct fi_provider *prov,
 
 	peer_offset = sizeof(**smr);
 	cmd_queue_offset = peer_offset + sizeof(struct smr_peer) +
-			sizeof(struct shm_region *) * attr->peer_count;
+			sizeof(struct smr_region *) * attr->peer_count;
 	tx_ctx_offset = cmd_queue_offset + sizeof(struct smr_cmd_queue) +
 			sizeof(struct smr_cmd) * attr->rx_count;
 	resp_queue_offset = tx_ctx_offset + sizeof(struct smr_tx_ctx) +
@@ -121,9 +121,10 @@ err1:
 	return -errno;
 }
 
-int smr_map(struct shm_region *smr, const char *name, int *id)
+int smr_map(struct smr_region *smr, const char *name, int *id)
 {
-	struct shm_region *peer;
+	struct smr_region *peer;
+	struct smr_region **peer_buf;
 	size_t size;
 	int fd, ret;
 
@@ -153,8 +154,9 @@ int smr_map(struct shm_region *smr, const char *name, int *id)
 
 	smr_lock(smr);
 	if (!freestack_isempty(smr_peer(smr))) {
-		*id = freestack_pop(smr_peer(smr));
-		smr_peer(smr)->buf[*id] = peer;
+		peer_buf = freestack_pop(smr_peer(smr));
+		*peer_buf = peer;
+		*id = smr_peer_index(smr_peer(smr), peer_buf);
 	} else {
 		FI_WARN(smr->prov, FI_LOG_EP_CTRL, "peer array is full\n");
 		ret = -FI_ENOMEM;
@@ -165,17 +167,21 @@ out:
 	return ret;
 }
 
-void smr_unmap(struct shm_region, int id)
+void smr_unmap(struct smr_region *smr, int id)
 {
-	munmap(smr_peer_region(smr, i), smr_peer_region(smr, i)->total_size);
+	munmap(smr_peer_region(smr, id), smr_peer_region(smr, id)->total_size);
 }
 
-void smr_free(struct shm_region *smr)
+void smr_free(struct smr_region *smr)
 {
-	int i;
+	int i, size;
+	uintptr_t peer;
 
-	for (i = 0; i < smr_peer(smr)->size; i++) {
-		if (smr_peer(smr)->buf[i] >= smr_peer(smr)->size)
+	size = smr_peer(smr)->size;
+	for (i = 0; i < size; i++) {
+		peer = (uintptr_t)smr_peer(smr)->buf[i];
+		if (peer >= (uintptr_t)&smr_peer(smr)->buf[size] ||
+		    peer < (uintptr_t)&smr_peer(smr)->buf[0])
 			smr_unmap(smr, i);
 	}
 	shm_unlink(smr_name(smr));

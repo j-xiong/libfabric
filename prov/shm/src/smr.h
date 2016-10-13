@@ -46,10 +46,10 @@
 #include <rdma/fi_endpoint.h>
 #include <rdma/fi_eq.h>
 #include <rdma/fi_errno.h>
-#include <rdma/fi_prov.h>
 #include <rdma/fi_rma.h>
 #include <rdma/fi_tagged.h>
 #include <rdma/fi_trigger.h>
+#include <rdma/providers/fi_prov.h>
 
 #include <fi.h>
 #include <fi_enosys.h>
@@ -69,6 +69,7 @@
 
 extern struct fi_provider smr_prov;
 extern struct fi_info smr_info;
+extern struct util_prov smr_util_prov;
 
 
 int smr_check_info(struct fi_info *info);
@@ -104,7 +105,8 @@ struct smr_ep {
 	size_t			tx_size;
 	struct smr_rx_cirq	*rxq; /* protected by rx_cq lock */
 	const char		*name;
-	struct shm_region	*region;
+	struct smr_region	*region;
+	struct util_av		*av;
 };
 
 int smr_endpoint(struct fid_domain *domain, struct fi_info *info,

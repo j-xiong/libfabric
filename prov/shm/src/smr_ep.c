@@ -105,7 +105,7 @@ static struct fi_ops_ep smr_ep_ops = {
 
 static void smr_tx_comp(struct smr_ep *ep, void *context)
 {
-	struct fi_cq_data_entry *comp;
+	struct fi_cq_tagged_entry *comp;
 
 	comp = cirque_tail(ep->util_ep.tx_cq->cirq);
 	comp->op_context = context;
@@ -125,7 +125,7 @@ static void smr_tx_comp_signal(struct smr_ep *ep, void *context)
 static void smr_rx_comp(struct smr_ep *ep, void *context, uint64_t flags,
 			 size_t len, void *buf, void *addr)
 {
-	struct fi_cq_data_entry *comp;
+	struct fi_cq_tagged_entry *comp;
 
 	comp = cirque_tail(ep->util_ep.rx_cq->cirq);
 	comp->op_context = context;
@@ -159,12 +159,16 @@ static void smr_rx_src_comp_signal(struct smr_ep *ep, void *context,
 
 }
 
-void smr_ep_progress(struct smr_ep *ep)
+void smr_ep_progress(struct util_ep *util_ep)
 {
 	struct smr_ep_entry *entry;
-	int ret;
+	struct smr_ep *ep;
+	fi_addr_t addr;
+	int ret = 0;
 
-	fastlock_acquire(&ep->util_ep.rx_cq->cq_lock);
+	ep = container_of(util_ep, struct smr_ep, util_ep);
+
+	fastlock_acquire(&util_ep->rx_cq->cq_lock);
 	if (cirque_isempty(ep->rxq))
 		goto out;
 
@@ -177,7 +181,7 @@ void smr_ep_progress(struct smr_ep *ep)
 		cirque_discard(ep->rxq);
 	}
 out:
-	fastlock_release(&ep->util_ep.rx_cq->cq_lock);
+	fastlock_release(&util_ep->rx_cq->cq_lock);
 }
 
 ssize_t smr_recvmsg(struct fid_ep *ep_fid, const struct fi_msg *msg,
@@ -187,7 +191,7 @@ ssize_t smr_recvmsg(struct fid_ep *ep_fid, const struct fi_msg *msg,
 	struct smr_ep_entry *entry;
 	ssize_t ret;
 
-	ep = container_of(ep_fid, struct smr_ep, ep_fid.fid);
+	ep = container_of(ep_fid, struct smr_ep, util_ep.ep_fid.fid);
 	fastlock_acquire(&ep->util_ep.rx_cq->cq_lock);
 	if (cirque_isfull(ep->rxq)) {
 		ret = -FI_EAGAIN;
@@ -248,32 +252,45 @@ out:
 	return ret;
 }
 
-static void smr_format_inject_msg(struct shm_cmd *cmd, void *buf, size_t len)
+static void smr_format_send(struct smr_cmd *cmd)
 {
-	cmd->hdr.version = OFI_OP_VERSION;
-	cmd->hdr.rx_index = 0;
-	cmd->hdr.op = ofi_op_msg;
-	cmd->hdr.op_data = shm_op_inject;
-	cmd->hdr.flags = 0;
+	cmd->hdr.op.version = OFI_OP_VERSION;
+	cmd->hdr.op.rx_index = 0;
+	cmd->hdr.op.op = ofi_op_msg;
+	cmd->hdr.op.op_data = smr_op_inline; /* or smr_op_iov for large message */
+	cmd->hdr.op.flags = 0;
 
-	cmd->hdr.size = 0;
-	cmd->hdr.data = 0;
-	cmd->hdr.resv = 0;
+	cmd->hdr.op.size = 0;
+	cmd->hdr.op.data = 0;
+	cmd->hdr.op.resv = 0;
+}
+
+static void smr_format_inject_msg(struct smr_cmd *cmd, void *buf, size_t len)
+{
+	cmd->hdr.op.version = OFI_OP_VERSION;
+	cmd->hdr.op.rx_index = 0;
+	cmd->hdr.op.op = ofi_op_msg;
+	cmd->hdr.op.op_data = smr_op_inject;
+	cmd->hdr.op.flags = 0;
+
+	cmd->hdr.op.size = 0;
+	cmd->hdr.op.data = 0;
+	cmd->hdr.op.resv = 0;
 }
 
 ssize_t smr_send(struct fid_ep *ep_fid, const void *buf, size_t len, void *desc,
 		fi_addr_t dest_addr, void *context)
 {
 	struct smr_ep *ep;
-	struct shm_region *peer_smr;
+	struct smr_region *peer_smr;
 	struct smr_req *tx_req;
 	struct smr_inject_buf *tx_buf;
-	struct shm_cmd *cmd;
+	struct smr_cmd *cmd;
 	int peer_id;
 	ssize_t ret = 0;
 
 	ep = container_of(ep_fid, struct smr_ep, util_ep.ep_fid.fid);
-	peer_id = ofi_av_get_data(ep->util_ep.av, dest_addr);
+	peer_id = (int)(uintptr_t)ofi_av_get_addr(ep->util_ep.av, dest_addr);
 
 	fastlock_acquire(&ep->util_ep.tx_cq->cq_lock);
 	if (freestack_isempty(smr_tx_ctx(ep->region))) {
@@ -310,7 +327,7 @@ ssize_t smr_sendmsg(struct fid_ep *ep_fid, const struct fi_msg *msg,
 		uint64_t flags)
 {
 	struct smr_ep *ep;
-	ssize_t ret;
+	ssize_t ret = 0;
 
 	ep = container_of(ep_fid, struct smr_ep, util_ep.ep_fid.fid);
 
@@ -350,7 +367,7 @@ ssize_t smr_inject(struct fid_ep *ep_fid, const void *buf, size_t len,
 		fi_addr_t dest_addr)
 {
 	struct smr_ep *ep;
-	ssize_t ret;
+	ssize_t ret = 0;
 
 	ep = container_of(ep_fid, struct smr_ep, util_ep.ep_fid.fid);
 
@@ -375,7 +392,6 @@ static struct fi_ops_msg smr_msg_ops = {
 static int smr_ep_close(struct fid *fid)
 {
 	struct smr_ep *ep;
-	struct util_wait_fd *wait;
 
 	ep = container_of(fid, struct smr_ep, util_ep.ep_fid.fid);
 
@@ -404,7 +420,7 @@ static int smr_ep_close(struct fid *fid)
 static int smr_ep_bind_cq(struct smr_ep *ep, struct util_cq *cq, uint64_t flags)
 {
 	struct util_wait_fd *wait;
-	int ret;
+	int ret = 0;
 
 	if (flags & ~(FI_TRANSMIT | FI_RECV)) {
 		FI_WARN(&smr_prov, FI_LOG_EP_CTRL,
@@ -472,7 +488,7 @@ static int smr_ep_bind(struct fid *ep_fid, struct fid *bfid, uint64_t flags)
 		ep->util_ep.av = av;
 		break;
 	case FI_CLASS_CQ:
-		ret = smr_ep_bind_cq(ep, container_of(bfid, struct smr_cq,
+		ret = smr_ep_bind_cq(ep, container_of(bfid, struct util_cq,
 						      cq_fid.fid), flags);
 		break;
 	case FI_CLASS_EQ:
@@ -565,7 +581,7 @@ int smr_endpoint(struct fid_domain *domain, struct fi_info *info,
 	*ep_fid = &ep->util_ep.ep_fid;
 	return 0;
 err:
-	free(ep->name);
+	free((void *)ep->name);
 	free(ep);
 	return ret;
 }

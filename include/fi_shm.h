@@ -43,8 +43,7 @@
 #include <fi_mem.h>
 #include <fi_rbuf.h>
 
-#include <rdma/fi_prov.h>
-
+#include <rdma/providers/fi_prov.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -66,39 +65,39 @@ extern "C" {
 #endif
 
 
-/* SHM op_data: Specifies data source location */
+/* SMR op_data: Specifies data source location */
 enum {
-	shm_op_inline,	/* command data */
-	shm_op_inject,	/* inject buffers */
-	shm_op_iov,	/* reference iovec via CMA */
+	smr_op_inline,	/* command data */
+	smr_op_inject,	/* inject buffers */
+	smr_op_iov,	/* reference iovec via CMA */
 };
 
-struct shm_cmd_hdr {
+struct smr_cmd_hdr {
 	struct ofi_op_hdr	op;
 	uint32_t		cmd_id;
 	uint32_t		rx_key;
 };
 
-#define SHM_CMD_SIZE		128	/* align with 64-byte cache line */
-#define SHM_CMD_DATA_LEN	(128 - sizeof(struct shm_cmd_hdr))
+#define SMR_CMD_SIZE		128	/* align with 64-byte cache line */
+#define SMR_CMD_DATA_LEN	(128 - sizeof(struct smr_cmd_hdr))
 
-union shm_cmd_data {
-	uint8_t			msg[SHM_CMD_DATA_LEN];
-	struct iovec		iov[SHM_CMD_DATA_LEN / sizeof(struct iovec)];
-	struct ofi_rma_iov	rma_iov[SHM_CMD_DATA_LEN / sizeof(struct ofi_rma_iov)];
-	struct ofi_rma_ioc	rma_ioc[SHM_CMD_DATA_LEN / sizeof(struct ofi_rma_ioc)];
+union smr_cmd_data {
+	uint8_t			msg[SMR_CMD_DATA_LEN];
+	struct iovec		iov[SMR_CMD_DATA_LEN / sizeof(struct iovec)];
+	struct ofi_rma_iov	rma_iov[SMR_CMD_DATA_LEN / sizeof(struct ofi_rma_iov)];
+	struct ofi_rma_ioc	rma_ioc[SMR_CMD_DATA_LEN / sizeof(struct ofi_rma_ioc)];
 };
 
-struct shm_cmd {
-	struct shm_cmd_hdr	hdr;
-	union shm_cmd_data	data;
+struct smr_cmd {
+	struct smr_cmd_hdr	hdr;
+	union smr_cmd_data	data;
 };
 
 enum {
 	SMR_INJECT_SIZE = 4096
 };
 
-struct shm_region {
+struct smr_region {
 	uint8_t		version;
 	uint8_t		resv;
 	uint16_t	flags;
@@ -109,7 +108,7 @@ struct shm_region {
 	size_t		total_size;
 	void		*map;
 
-	/* offsets from start of shm_region */
+	/* offsets from start of smr_region */
 	size_t		peer_offset;
 	size_t		cmd_queue_offset;
 	size_t		tx_ctx_offset;
@@ -134,47 +133,47 @@ struct smr_inject_buf {
 	uint8_t		data[SMR_INJECT_SIZE];
 };
 
-DECLARE_FREESTACK(struct shm_region *, smr_peer);
+DECLARE_FREESTACK(struct smr_region *, smr_peer);
 DECLARE_CIRQUE(struct smr_cmd, smr_cmd_queue);
 DECLARE_FREESTACK(struct smr_req, smr_tx_ctx);
 DECLARE_CIRQUE(struct smr_resp, smr_resp_queue);
 DECLARE_FREESTACK(struct smr_inject_buf, smr_inject_pool);
 
-static inline struct smr_peer *smr_peer(struct shm_region *smr)
+static inline struct smr_peer *smr_peer(struct smr_region *smr)
 {
 	return (struct smr_peer *) ((char *) smr + smr->peer_offset);
 }
-static inline struct shm_region *smr_peer_region(struct shm_region *smr, int i)
+static inline struct smr_region *smr_peer_region(struct smr_region *smr, int i)
 {
 	return smr_peer(smr)->buf[i];
 }
-static inline struct smr_cmd_queue *smr_cmd_queue(struct shm_region *smr)
+static inline struct smr_cmd_queue *smr_cmd_queue(struct smr_region *smr)
 {
 	return (struct smr_cmd_queue *) ((char *) smr + smr->cmd_queue_offset);
 }
-static inline struct smr_tx_ctx *smr_tx_ctx(struct shm_region *smr)
+static inline struct smr_tx_ctx *smr_tx_ctx(struct smr_region *smr)
 {
 	return (struct smr_tx_ctx *) ((char *) smr + smr->tx_ctx_offset);
 }
-static inline struct smr_resp_queue *smr_resp_queue(struct shm_region *smr)
+static inline struct smr_resp_queue *smr_resp_queue(struct smr_region *smr)
 {
 	return (struct smr_resp_queue *) ((char *) smr + smr->resp_queue_offset);
 }
-static inline struct smr_inject_pool *smr_inject_pool(struct shm_region *smr)
+static inline struct smr_inject_pool *smr_inject_pool(struct smr_region *smr)
 {
 	return (struct smr_inject_pool *) ((char *) smr + smr->inject_pool_offset);
 }
-static inline const char *smr_name(struct shm_region *smr)
+static inline const char *smr_name(struct smr_region *smr)
 {
 	return (const char *) smr + smr->name_offset;
 }
 
-static inline void smr_lock(struct shm_region *smr)
+static inline void smr_lock(struct smr_region *smr)
 {
 	do {
 	} while (atomic_compare_swap(&smr->lock, 0, 1));
 }
-static inline void smr_unlock(struct shm_region *smr)
+static inline void smr_unlock(struct smr_region *smr)
 {
 	atomic_set(&smr->lock, 0);
 }
@@ -188,10 +187,10 @@ struct smr_attr {
 };
 
 int smr_create(const struct fi_provider *prov,
-	       const struct smr_attr *attr, struct shm_region **smr);
-int smr_map(struct shm_region *smr, const char *name, int *id);
-void smr_unmap(struct shm_region, int id);
-void smr_free(struct shm_region *smr);
+	       const struct smr_attr *attr, struct smr_region **smr);
+int smr_map(struct smr_region *smr, const char *name, int *id);
+void smr_unmap(struct smr_region *smr, int id);
+void smr_free(struct smr_region *smr);
 
 
 #ifdef __cplusplus

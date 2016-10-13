@@ -158,4 +158,15 @@ RXD_INI ;
 #  define RXD_INIT NULL
 #endif
 
+#if (HAVE_SHM) && (HAVE_SHM_DL)
+#  define SHM_INI FI_EXT_INI
+#  define SHM_INIT NULL
+#elif (HAVE_SHM)
+#  define SHM_INI INI_SIG(fi_shm_ini)
+#  define SHM_INIT fi_shm_ini()
+SHM_INI ;
+#else
+#  define SHM_INIT NULL
+#endif
+
 #endif /* _PROV_H_ */

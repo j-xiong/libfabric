@@ -38,12 +38,13 @@
 
 int smr_check_info(struct fi_info *info)
 {
-	return fi_check_info(&smr_prov, &smr_info, info);
+	return fi_check_info(&smr_util_prov, info, FI_MATCH_EXACT);
 }
 
 static int smr_getinfo(uint32_t version, const char *node, const char *service,
 			uint64_t flags, struct fi_info *hints, struct fi_info **info)
 {
+#if 0
 	/* A SHM address namespace is not yet defined.
 	 * We require FI_SOURCE with valid node and service parameters.
 	 * The proposed name space is:
@@ -57,9 +58,9 @@ static int smr_getinfo(uint32_t version, const char *node, const char *service,
 			"SHM requires FI_SOURCE + node + service\n");
 		return -FI_ENODATA;
 	}
+#endif
 
-	return util_getinfo(&smr_prov, version, node, service, flags,
-			    &smr_info, hints, info);
+	return util_getinfo(&smr_util_prov, version, node, service, flags, hints, info);
 }
 
 static void smr_fini(void)
@@ -68,7 +69,7 @@ static void smr_fini(void)
 }
 
 struct fi_provider smr_prov = {
-	.name = "SHM",
+	.name = "shm",
 	.version = FI_VERSION(SMR_MAJOR_VERSION, SMR_MINOR_VERSION),
 	.fi_version = FI_VERSION(1, 3),
 	.getinfo = smr_getinfo,
@@ -76,7 +77,13 @@ struct fi_provider smr_prov = {
 	.cleanup = smr_fini
 };
 
-UDP_INI
+struct util_prov smr_util_prov = {
+	.prov = &smr_prov,
+	.info = &smr_info,
+	.flags = 0
+};
+
+SHM_INI
 {
 	return &smr_prov;
 }
