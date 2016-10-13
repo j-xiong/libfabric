@@ -135,6 +135,7 @@ static void fi_tostr_addr_format(char *buf, uint32_t addr_format)
 	CASEENUMSTR(FI_SOCKADDR_IB);
 	CASEENUMSTR(FI_ADDR_PSMX);
 	CASEENUMSTR(FI_ADDR_GNI);
+	CASEENUMSTR(FI_ADDR_STRING);
 	default:
 		if (addr_format & FI_PROV_SPECIFIC)
 			strcatf(buf, "Provider specific");
@@ -230,6 +231,7 @@ static void fi_tostr_protocol(char *buf, uint32_t protocol)
 	CASEENUMSTR(FI_PROTO_GNI);
 	CASEENUMSTR(FI_PROTO_RXM);
 	CASEENUMSTR(FI_PROTO_RXD);
+	CASEENUMSTR(FI_PROTO_SHM);
 	default:
 		if (protocol & FI_PROV_SPECIFIC)
 			strcatf(buf, "Provider specific");
