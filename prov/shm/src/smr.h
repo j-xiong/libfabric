@@ -66,17 +66,24 @@
 #define SMR_MAJOR_VERSION 1
 #define SMR_MINOR_VERSION 0
 
+#define SMR_MAX_PEERS	256
 
 extern struct fi_provider smr_prov;
 extern struct fi_info smr_info;
 extern struct util_prov smr_util_prov;
 
-
 int smr_check_info(struct fi_info *info);
 int smr_fabric(struct fi_fabric_attr *attr, struct fid_fabric **fabric,
 		void *context);
+
+struct smr_domain {
+	struct util_domain	util_domain;
+	struct smr_map		*smr_map;
+};
+
 int smr_domain_open(struct fid_fabric *fabric, struct fi_info *info,
 		struct fid_domain **dom, void *context);
+
 int smr_eq_open(struct fid_fabric *fabric, struct fi_eq_attr *attr,
 		struct fid_eq **eq, void *context);
 

@@ -304,7 +304,7 @@ ssize_t smr_send(struct fid_ep *ep_fid, const void *buf, size_t len, void *desc,
 
 	memcpy(tx_buf->data, buf, len);
 
-	smr_lock(peer_smr);
+	smr_lock(&peer_smr->lock);
 	if (cirque_isfull(smr_cmd_queue(peer_smr))) {
 		freestack_push(smr_tx_ctx(ep->region), tx_req);
 		freestack_push(smr_inject_pool(ep->region), tx_buf);
@@ -317,7 +317,7 @@ ssize_t smr_send(struct fid_ep *ep_fid, const void *buf, size_t len, void *desc,
 
 	cirque_commit(smr_cmd_queue(peer_smr));
 unlock:
-	smr_unlock(peer_smr);
+	smr_unlock(&peer_smr->lock);
 out:
 	fastlock_release(&ep->util_ep.tx_cq->cq_lock);
 	return ret;
@@ -506,9 +506,12 @@ static int smr_ep_ctrl(struct fid *fid, int command, void *arg)
 {
 	struct smr_attr attr;
 	struct smr_ep *ep;
+	struct smr_domain *domain;
 	int ret;
 
 	ep = container_of(fid, struct smr_ep, util_ep.ep_fid.fid);
+	domain = container_of(ep->util_ep.domain, struct smr_domain, util_domain);
+
 	switch (command) {
 	case FI_ENABLE:
 		if (!ep->util_ep.rx_cq || !ep->util_ep.tx_cq)
@@ -517,10 +520,9 @@ static int smr_ep_ctrl(struct fid *fid, int command, void *arg)
 			return -FI_ENOAV;
 
 		attr.name = ep->name;
-		attr.peer_count = ep->util_ep.av->count;
 		attr.rx_count = ep->rxq->size;
 		attr.tx_count = ep->tx_size;
-		ret = smr_create(&smr_prov, &attr, &ep->region);
+		ret = smr_create(domain->smr_map, &attr, &ep->region);
 		break;
 	default:
 		return -FI_ENOSYS;

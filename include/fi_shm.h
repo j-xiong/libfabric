@@ -97,19 +97,28 @@ enum {
 	SMR_INJECT_SIZE = 4096
 };
 
+struct smr_region;
+DECLARE_FREESTACK(struct smr_region *, smr_peer);
+
+struct smr_map {
+	const struct fi_provider *prov;
+	atomic_t	lock;
+	struct smr_peer	peer;	/* must be last */
+};
+
 struct smr_region {
+	const struct fi_provider *prov;
 	uint8_t		version;
 	uint8_t		resv;
 	uint16_t	flags;
 	int		pid;
 	atomic_t	lock;
+	struct smr_map	*smr_map;
 
-	const struct fi_provider *prov;
 	size_t		total_size;
 	void		*map;
 
 	/* offsets from start of smr_region */
-	size_t		peer_offset;
 	size_t		cmd_queue_offset;
 	size_t		tx_ctx_offset;
 	size_t		resp_queue_offset;
@@ -133,7 +142,6 @@ struct smr_inject_buf {
 	uint8_t		data[SMR_INJECT_SIZE];
 };
 
-DECLARE_FREESTACK(struct smr_region *, smr_peer);
 DECLARE_CIRQUE(struct smr_cmd, smr_cmd_queue);
 DECLARE_FREESTACK(struct smr_req, smr_tx_ctx);
 DECLARE_CIRQUE(struct smr_resp, smr_resp_queue);
@@ -141,11 +149,11 @@ DECLARE_FREESTACK(struct smr_inject_buf, smr_inject_pool);
 
 static inline struct smr_peer *smr_peer(struct smr_region *smr)
 {
-	return (struct smr_peer *) ((char *) smr + smr->peer_offset);
+	return &smr->smr_map->peer;
 }
 static inline struct smr_region *smr_peer_region(struct smr_region *smr, int i)
 {
-	return smr_peer(smr)->buf[i];
+	return smr->smr_map->peer.buf[i];
 }
 static inline struct smr_cmd_queue *smr_cmd_queue(struct smr_region *smr)
 {
@@ -168,30 +176,38 @@ static inline const char *smr_name(struct smr_region *smr)
 	return (const char *) smr + smr->name_offset;
 }
 
-static inline void smr_lock(struct smr_region *smr)
+static inline void smr_lock(atomic_t *lock)
 {
 	do {
-	} while (atomic_compare_swap(&smr->lock, 0, 1));
+	} while (atomic_compare_swap(lock, 0, 1));
 }
-static inline void smr_unlock(struct smr_region *smr)
+static inline void smr_unlock(atomic_t *lock)
 {
-	atomic_set(&smr->lock, 0);
+	atomic_set(lock, 0);
 }
 
+static inline void smr_set_map(struct smr_region *smr, struct smr_map *map)
+{
+	smr->smr_map = map;
+}
 
 struct smr_attr {
 	const char	*name;
-	size_t		peer_count;
 	size_t		rx_count;
 	size_t		tx_count;
 };
 
-int smr_create(const struct fi_provider *prov,
-	       const struct smr_attr *attr, struct smr_region **smr);
-int smr_map(struct smr_region *smr, const char *name, int *id);
-void smr_unmap(struct smr_region *smr, int id);
-void smr_free(struct smr_region *smr);
+int	smr_map_create(const struct fi_provider *prov, int peer_count,
+		       struct smr_map **map);
+int	smr_map_add(struct smr_map *map, const char *name, int *id);
+void	smr_map_del(struct smr_map *map, int id);
+void	smr_map_free(struct smr_map *map);
 
+struct smr_region *smr_map_get(struct smr_map *map, int id);
+
+int	smr_create(struct smr_map *map, const struct smr_attr *attr,
+		   struct smr_region **smr);
+void	smr_free(struct smr_region *smr);
 
 #ifdef __cplusplus
 }

@@ -35,10 +35,9 @@
 
 #include "smr.h"
 
-
 static struct fi_ops_domain smr_domain_ops = {
 	.size = sizeof(struct fi_ops_domain),
-//	.av_open = ip_av_create,			TODO **********
+//	.av_open = smr_av_open,
 	.cq_open = smr_cq_open,
 	.endpoint = smr_endpoint,
 	.scalable_ep = fi_no_scalable_ep,
@@ -51,11 +50,14 @@ static struct fi_ops_domain smr_domain_ops = {
 static int smr_domain_close(fid_t fid)
 {
 	int ret;
-	struct util_domain *domain;
-	domain = container_of(fid, struct util_domain, domain_fid.fid);
-	ret = ofi_domain_close(domain);
+	struct smr_domain *domain;
+
+	domain = container_of(fid, struct smr_domain, util_domain.domain_fid.fid);
+	ret = ofi_domain_close(&domain->util_domain);
 	if (ret)
 		return ret;
+
+	smr_map_free(domain->smr_map);
 	free(domain);
 	return 0;
 }
@@ -72,21 +74,30 @@ int smr_domain_open(struct fid_fabric *fabric, struct fi_info *info,
 		struct fid_domain **domain, void *context)
 {
 	int ret;
-	struct util_domain *util_domain;
+	struct smr_domain *smr_domain;
 
 	ret = smr_check_info(info);
 	if (ret)
 		return ret;
 
-	util_domain = calloc(1, sizeof(*util_domain));
-	if (!util_domain)
+	smr_domain = calloc(1, sizeof(*smr_domain));
+	if (!smr_domain)
 		return -FI_ENOMEM;
 
-	ret = ofi_domain_init(fabric, info, util_domain, context);
-	if (ret)
+	ret = ofi_domain_init(fabric, info, &smr_domain->util_domain, context);
+	if (ret) {
+		free(smr_domain);
 		return ret;
+	}
 
-	*domain = &util_domain->domain_fid;
+	ret = smr_map_create(&smr_prov, SMR_MAX_PEERS, &smr_domain->smr_map);
+	if (ret) {
+		ofi_domain_close(&smr_domain->util_domain);
+		free(smr_domain);
+		return ret;
+	}
+
+	*domain = &smr_domain->util_domain.domain_fid;
 	(*domain)->fid.ops = &smr_domain_fi_ops;
 	(*domain)->ops = &smr_domain_ops;
 	return 0;
