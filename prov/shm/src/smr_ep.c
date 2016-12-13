@@ -64,7 +64,7 @@ int smr_getname(fid_t fid, void *addr, size_t *addrlen)
 	if (!addr || *addrlen == 0 ||
 	    snprintf(addr, *addrlen, "%s", ep->name) >= *addrlen)
 		ret = -FI_ETOOSMALL;
-	*addrlen = strlen(ep->name) + 1;
+	*addrlen = sizeof(struct smr_addr);
 	return ret;
 }
 

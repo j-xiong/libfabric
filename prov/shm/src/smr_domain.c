@@ -37,7 +37,7 @@
 
 static struct fi_ops_domain smr_domain_ops = {
 	.size = sizeof(struct fi_ops_domain),
-//	.av_open = smr_av_open,
+	.av_open = smr_av_open,
 	.cq_open = smr_cq_open,
 	.endpoint = smr_endpoint,
 	.scalable_ep = fi_no_scalable_ep,

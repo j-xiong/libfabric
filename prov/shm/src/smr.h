@@ -81,12 +81,19 @@ struct smr_domain {
 	struct smr_map		*smr_map;
 };
 
+#define SMR_NAME_SIZE	16
+struct smr_addr {
+	char	name[SMR_NAME_SIZE];
+};
+
 int smr_domain_open(struct fid_fabric *fabric, struct fi_info *info,
 		struct fid_domain **dom, void *context);
 
 int smr_eq_open(struct fid_fabric *fabric, struct fi_eq_attr *attr,
 		struct fid_eq **eq, void *context);
 
+int smr_av_open(struct fid_domain *domain, struct fi_av_attr *attr,
+		struct fid_av **av, void *context);
 
 #define SMR_IOV_LIMIT		4
 
