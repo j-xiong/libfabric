@@ -113,10 +113,9 @@ struct smr_region {
 	uint16_t	flags;
 	int		pid;
 	atomic_t	lock;
-	struct smr_map	*smr_map;
+	struct smr_map	*map;
 
 	size_t		total_size;
-	void		*map;
 
 	/* offsets from start of smr_region */
 	size_t		cmd_queue_offset;
@@ -149,11 +148,11 @@ DECLARE_FREESTACK(struct smr_inject_buf, smr_inject_pool);
 
 static inline struct smr_peer *smr_peer(struct smr_region *smr)
 {
-	return &smr->smr_map->peer;
+	return &smr->map->peer;
 }
 static inline struct smr_region *smr_peer_region(struct smr_region *smr, int i)
 {
-	return smr->smr_map->peer.buf[i];
+	return smr->map->peer.buf[i];
 }
 static inline struct smr_cmd_queue *smr_cmd_queue(struct smr_region *smr)
 {
@@ -188,7 +187,7 @@ static inline void smr_unlock(atomic_t *lock)
 
 static inline void smr_set_map(struct smr_region *smr, struct smr_map *map)
 {
-	smr->smr_map = map;
+	smr->map = map;
 }
 
 struct smr_attr {

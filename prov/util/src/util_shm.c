@@ -50,6 +50,7 @@ int smr_create(struct smr_map *map,
 	size_t total_size, cmd_queue_offset, tx_ctx_offset;
 	size_t resp_queue_offset, inject_pool_offset, name_offset;
 	int fd, ret;
+	void *mapped_addr;
 
 	cmd_queue_offset = sizeof(**smr);
 	tx_ctx_offset = cmd_queue_offset + sizeof(struct smr_cmd_queue) +
@@ -61,13 +62,33 @@ int smr_create(struct smr_map *map,
 	name_offset = inject_pool_offset + sizeof(struct smr_inject_pool) +
 			sizeof(struct smr_inject_buf) * attr->tx_count;
 	total_size = name_offset + strlen(attr->name) + 1;
-	*smr = calloc(1, total_size);
-	if (!*smr) {
-		FI_WARN(map->prov, FI_LOG_EP_CTRL, "failed to alloc SHM region\n");
-		return -FI_ENOMEM;
+	total_size = roundup_power_of_two(total_size);
+
+	fd = shm_open(attr->name, O_RDWR | O_CREAT, S_IRUSR | S_IWUSR);
+	if (fd < 0) {
+		FI_WARN(map->prov, FI_LOG_EP_CTRL, "shm_open error\n");
+		goto err1;
 	}
 
-	(*smr)->smr_map = map;
+	ret = ftruncate(fd, total_size);
+	if (ret < 0) {
+		FI_WARN(map->prov, FI_LOG_EP_CTRL, "ftruncate error\n");
+		goto err2;
+	}
+
+	mapped_addr = mmap(NULL, total_size, PROT_READ | PROT_WRITE,
+			   MAP_SHARED, fd, 0);
+	if (mapped_addr == MAP_FAILED) {
+		FI_WARN(map->prov, FI_LOG_EP_CTRL, "mmap error\n");
+		goto err2;
+	}
+
+	/* TODO: If we unlink here, can other processes open the region? */
+	close(fd);
+
+	*smr = mapped_addr;
+
+	(*smr)->map = map;
 	(*smr)->prov = map->prov;
 	(*smr)->version = SMR_VERSION;
 	(*smr)->flags = SMR_FLAG_ATOMIC | SMR_FLAG_DEBUG;
@@ -87,41 +108,18 @@ int smr_create(struct smr_map *map,
 	smr_inject_pool_init(smr_inject_pool(*smr), attr->tx_count);
 	strncpy((char *) smr_name(*smr), attr->name, total_size - name_offset);
 
-	fd = shm_open(attr->name, O_RDWR | O_CREAT, S_IRUSR | S_IWUSR);
-	if (fd < 0) {
-		FI_WARN((*smr)->prov, FI_LOG_EP_CTRL, "shm_open error\n");
-		goto err1;
-	}
-
-	ret = ftruncate(fd, total_size);
-	if (ret < 0) {
-		FI_WARN((*smr)->prov, FI_LOG_EP_CTRL, "ftruncate error\n");
-		goto err2;
-	}
-
-	(*smr)->map = mmap(NULL, total_size, PROT_READ | PROT_WRITE,
-			   MAP_SHARED, fd, 0);
-	if ((*smr)->map == MAP_FAILED) {
-		FI_WARN((*smr)->prov, FI_LOG_EP_CTRL, "mmap error\n");
-		goto err2;
-	}
-
-	/* TODO: If we unlink here, can other processes open the region? */
-	close(fd);
 	return 0;
 
 err2:
 	shm_unlink(attr->name);
 	close(fd);
 err1:
-	free(*smr);
 	return -errno;
 }
 
 void smr_free(struct smr_region *smr)
 {
 	shm_unlink(smr_name(smr));
-	free(smr);
 }
 
 int smr_map_create(const struct fi_provider *prov, int peer_count,
@@ -147,7 +145,7 @@ int smr_map_add(struct smr_map *map, const char *name, int *id)
 	struct smr_region *peer;
 	struct smr_region **peer_buf;
 	size_t size;
-	int fd, ret;
+	int fd, ret = 0;
 
 	fd = shm_open(name, O_RDWR, S_IRUSR | S_IWUSR);
 	if (fd < 0) {
@@ -203,6 +201,7 @@ void smr_map_del(struct smr_map *map, int id)
 		return;
 
 	munmap(peer, peer->total_size);
+	freestack_push(&map->peer, &map->peer.buf[id]);
 }
 
 void smr_map_free(struct smr_map *map)
