@@ -290,7 +290,7 @@ ssize_t smr_send(struct fid_ep *ep_fid, const void *buf, size_t len, void *desc,
 	ssize_t ret = 0;
 
 	ep = container_of(ep_fid, struct smr_ep, util_ep.ep_fid.fid);
-	peer_id = (int)(uintptr_t)ofi_av_get_addr(ep->util_ep.av, dest_addr);
+	peer_id = *(int *)ofi_av_get_addr(ep->util_ep.av, dest_addr);
 
 	fastlock_acquire(&ep->util_ep.tx_cq->cq_lock);
 	if (freestack_isempty(smr_tx_ctx(ep->region))) {
