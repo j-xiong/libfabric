@@ -199,6 +199,10 @@ int ofi_get_addr(uint32_t addr_format, uint64_t flags,
 	case FI_SOCKADDR_IN6:
 		return fi_get_sockaddr(AF_INET6, flags, node, service,
 				       (struct sockaddr **) addr, addrlen);
+	case FI_ADDR_STRING:
+		*(char **)addr = strdup(node);
+		*addrlen = strlen(node) + 1;
+		return 0;
 	default:
 		return -FI_ENOSYS;
 	}
