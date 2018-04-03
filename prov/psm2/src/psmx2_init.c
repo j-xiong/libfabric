@@ -200,6 +200,15 @@ static int psmx2_init_lib(void)
 	/* turn on multi-ep feature, but don't overwrite existing setting */
 	setenv("PSM2_MULTI_EP", "1", 0);
 
+	/*
+	 * the receive thread sets the hfi fd notification mode to "urgent packet"
+	 * only. turn off the receive thread so that the hfi fd can be used as user
+	 * level wait object.
+	 *
+	 * don't overwrite existing setting.
+	 */
+	setenv("PSM2_RCVTHREAD", "0", 0);
+
 	psm2_error_register_handler(NULL, PSM2_ERRHANDLER_NO_HANDLER);
 
 	major = PSM2_VERNO_MAJOR;

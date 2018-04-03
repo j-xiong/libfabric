@@ -432,6 +432,24 @@ static inline int psmx2_ep_get_flags(struct psmx2_fid_ep *ep, uint64_t *flags)
 	return 0;
 }
 
+/*
+ * Hack to retrieve hfi context fd from PSM2 endpoint
+ */
+#define EP_CONTEXT_OFFSET       120
+#define CONTEXT_FD_OFFSET       32
+#define EP_CONTEXT_FD(ep)       (*(int *)((char *)(ep) + EP_CONTEXT_OFFSET + CONTEXT_FD_OFFSET))
+
+static inline int psmx2_ep_get_hfi_fd(struct psmx2_fid_ep *ep)
+{
+	if (ep->rx)
+		return EP_CONTEXT_FD(ep->rx->psm2_ep);
+
+	if (ep->tx)
+		return EP_CONTEXT_FD(ep->tx->psm2_ep);
+
+	return -1;
+}
+
 DIRECT_FN
 STATIC int psmx2_ep_control(fid_t fid, int command, void *arg)
 {
@@ -477,6 +495,14 @@ STATIC int psmx2_ep_control(fid_t fid, int command, void *arg)
 	case FI_ENABLE:
 		ep->enabled = 1;
 		return 0;
+
+	case FI_GETWAIT:
+		if (!arg)
+			return -FI_EINVAL;
+		*(int *)arg = psmx2_ep_get_hfi_fd(ep);
+		FI_INFO(&psmx2_prov, FI_LOG_EP_CTRL,
+			"GETWIAT: ep %p fd %d\n", ep, *(int *)arg);
+		break;
 
 	default:
 		return -FI_ENOSYS;
@@ -733,11 +759,32 @@ static int psmx2_stx_close(fid_t fid)
 	return 0;
 }
 
+DIRECT_FN
+STATIC int psmx2_stx_control(fid_t fid, int command, void *arg)
+{
+	struct psmx2_fid_stx *stx;
+
+	stx = container_of(fid, struct psmx2_fid_stx, stx.fid);
+
+	switch (command) {
+	case FI_GETWAIT:
+		if (!arg)
+			return -FI_EINVAL;
+		*(int *)arg = EP_CONTEXT_FD(stx->tx->psm2_ep);
+		FI_INFO(&psmx2_prov, FI_LOG_EP_CTRL,
+			"GETWIAT: stx %p fd %d\n", stx, *(int *)arg);
+		break;
+	default:
+		return -FI_ENOSYS;
+	}
+	return 0;
+}
+
 static struct fi_ops psmx2_fi_ops_stx = {
 	.size = sizeof(struct fi_ops),
 	.close = psmx2_stx_close,
 	.bind = fi_no_bind,
-	.control = fi_no_control,
+	.control = psmx2_stx_control,
 	.ops_open = fi_no_ops_open,
 };
 
