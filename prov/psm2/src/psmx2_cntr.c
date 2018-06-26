@@ -103,7 +103,6 @@ void psmx2_cntr_add_trigger(struct psmx2_fid_cntr *cntr,
 	psmx2_cntr_check_trigger(cntr);
 }
 
-#define PSMX2_CNTR_POLL_THRESHOLD 100
 DIRECT_FN
 STATIC uint64_t psmx2_cntr_read(struct fid_cntr *cntr)
 {
@@ -114,7 +113,7 @@ STATIC uint64_t psmx2_cntr_read(struct fid_cntr *cntr)
 
 	cntr_priv = container_of(cntr, struct psmx2_fid_cntr, cntr);
 
-	if (poll_cnt++ >= PSMX2_CNTR_POLL_THRESHOLD) {
+	if (poll_cnt++ >= psmx2_env.cntr_prog_interval) {
 		if (cntr_priv->poll_all) {
 			psmx2_progress_all(cntr_priv->domain);
 		} else {

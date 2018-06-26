@@ -58,6 +58,7 @@ struct psmx2_env psmx2_env = {
 #if (PSMX2_TAG_LAYOUT == PSMX2_TAG_LAYOUT_RUNTIME)
 	.tag_layout	= "auto",
 #endif
+	.cntr_prog_interval = 100,
 };
 
 #if (PSMX2_TAG_LAYOUT == PSMX2_TAG_LAYOUT_RUNTIME)
@@ -87,6 +88,7 @@ static void psmx2_init_env(void)
 #if (PSMX2_TAG_LAYOUT == PSMX2_TAG_LAYOUT_RUNTIME)
 	fi_param_get_str(&psmx2_prov, "tag_layout", &psmx2_env.tag_layout);
 #endif
+	fi_param_get_int(&psmx2_prov, "cntr_prog_interval", &psmx2_env.cntr_prog_interval);
 }
 
 void psmx2_init_tag_layout(struct fi_info *info)
@@ -532,6 +534,9 @@ PROVIDER_INI
 			"tag60 means 32/4/60 for data/flags/tag;"
 			"tag64 means 4/28/64 for flags/data/tag (default: tag60).");
 #endif
+
+	fi_param_define(&psmx2_prov, "cntr_prog_interval", FI_PARAM_INT,
+			"How often progress is made inside fi_cntr_read. (default: 100).");
 
 	psmx2_init_env();
 
