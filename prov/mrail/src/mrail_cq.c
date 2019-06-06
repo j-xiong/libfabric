@@ -60,6 +60,7 @@ int mrail_cq_process_buf_recv(struct fi_cq_tagged_entry *comp,
 	};
 	struct mrail_ep *mrail_ep;
 	struct mrail_pkt *mrail_pkt;
+	struct mrail_recv *parent;
 	size_t size, len;
 	int ret, retv = 0;
 
@@ -88,6 +89,27 @@ int mrail_cq_process_buf_recv(struct fi_cq_tagged_entry *comp,
 	size = ofi_copy_to_iov(&recv->iov[1], recv->count - 1, 0,
 			       mrail_pkt->data, len);
 
+	if (recv->parent) {
+		/* This is part of striped message */
+		parent = recv->parent;
+		parent->pending_stripes--;
+		parent->received_bytes += len;
+		if (comp->flags & FI_REMOTE_CQ_DATA) {
+			parent->comp_flags |= FI_REMOTE_CQ_DATA;
+			parent->received_data = comp->data;
+		}
+		if (recv->hdr.subop == MRAIL_SUBOP_STRIPING_START)
+			parent->hdr.tag = recv->hdr.tag;
+		free(recv);
+		if (parent->pending_stripes) {
+			ret = 0;
+			goto out;
+		}
+		recv = parent;
+		comp->len = recv->received_bytes + sizeof(struct mrail_pkt);
+		comp->data = recv->received_data;
+	}
+
 	if (size < len) {
 		FI_WARN(&mrail_prov, FI_LOG_CQ, "Message truncated recv buf "
 			"size: %zu message length: %zu\n", size, len);
@@ -113,17 +135,61 @@ out:
 			"Unable to discard buffered recv\n");
 		retv = ret;
 	}
-	mrail_push_recv(recv);
+	if (!recv->parent)
+		mrail_push_recv(recv);
 	return retv;
+}
+
+static struct mrail_recv *mrail_create_sub_recv(struct mrail_ep *mrail_ep,
+						struct mrail_recv *parent,
+						uint64_t offset)
+{
+	struct mrail_recv *recv;
+	int i, diff;
+	size_t count;
+
+	/* TODO: use mrail_pop_recv(), but need to allocate more items */
+	recv = malloc(sizeof(*recv));
+	if (!recv)
+		return NULL;
+
+	memcpy(recv, parent, sizeof(*recv));
+        recv->parent = parent;
+	recv->iov[0].iov_base = &recv->hdr;
+
+	count = recv->count - 1;
+	ofi_consume_iov(&recv->iov[1], &count, offset);
+	recv->count = count + 1;
+	if (recv->count < parent->count) {
+		diff = parent->count - recv->count;
+		for (i = 1; i < recv->count; i++)
+			recv->desc[i] = parent->desc[i + diff];
+	}
+
+	return recv;
 }
 
 /* Should only be called while holding the EP's lock */
 static struct mrail_recv *mrail_match_recv(struct mrail_ep *mrail_ep,
 					   struct fi_cq_tagged_entry *comp,
-					   int src_addr)
+					   struct mrail_peer_info *peer_info)
 {
 	struct mrail_hdr *hdr = comp->buf;
 	struct mrail_recv *recv;
+	/*
+	 * Requesting FI_AV_TABLE from the underlying provider allows
+	 * us to use peer_info->addr as an int here.
+	 */
+	int src_addr = peer_info->addr;
+
+	if (hdr->subop == MRAIL_SUBOP_STRIPING_CONTINUE) {
+		assert(peer_info->striping_recv);
+		return mrail_create_sub_recv(mrail_ep,
+					     peer_info->striping_recv,
+					     hdr->offset);
+	} else if (hdr->subop != MRAIL_SUBOP_STRIPING_START) {
+		peer_info->striping_recv = NULL;
+	}
 
 	if (hdr->op == ofi_op_msg) {
 		FI_DBG(&mrail_prov, FI_LOG_CQ, "Got MSG op\n");
@@ -138,6 +204,16 @@ static struct mrail_recv *mrail_match_recv(struct mrail_ep *mrail_ep,
 						     hdr->tag, src_addr,
 						     (char *)comp,
 						     sizeof(*comp), NULL);
+	}
+
+	if (hdr->subop == MRAIL_SUBOP_STRIPING_START && recv) {
+		recv->pending_stripes = hdr->num_stripes;
+		recv->received_bytes = 0;
+		peer_info->striping_recv = recv;
+		recv = mrail_create_sub_recv(mrail_ep,
+					     peer_info->striping_recv,
+					     0);
+		assert(recv);
 	}
 
 	return recv;
@@ -173,10 +249,7 @@ static int mrail_process_ooo_recvs(struct mrail_ep *mrail_ep,
 	while (ooo_recv) {
 		FI_DBG(&mrail_prov, FI_LOG_CQ, "found ooo_recv seq=%d\n",
 				ooo_recv->seq_no);
-		/* Requesting FI_AV_TABLE from the underlying provider allows
-		 * us to use peer_info->addr as an int here. */
-		recv = mrail_match_recv(mrail_ep, &ooo_recv->comp,
-				(int) peer_info->addr);
+		recv = mrail_match_recv(mrail_ep, &ooo_recv->comp, peer_info);
 		ofi_ep_lock_release(&mrail_ep->util_ep);
 
 		if (recv) {
@@ -233,7 +306,7 @@ static int mrail_handle_recv_completion(struct fi_cq_tagged_entry *comp,
 	struct fi_recv_context *recv_ctx;
 	struct mrail_peer_info *peer_info;
 	struct mrail_ep *mrail_ep;
-	struct mrail_recv *recv;
+	struct mrail_recv *recv, *parent;
 	struct mrail_hdr *hdr;
 	uint32_t seq_no;
 	int ret;
@@ -244,6 +317,28 @@ static int mrail_handle_recv_completion(struct fi_cq_tagged_entry *comp,
 		 */
 		recv = comp->op_context;
 		assert(recv->hdr.version == MRAIL_HDR_VERSION);
+
+		if (recv->parent) {
+			/* This is part of striped message */
+			parent = recv->parent;
+			parent->pending_stripes--;
+			parent->received_bytes += (comp->len - sizeof(struct mrail_pkt));
+			if (comp->flags & FI_REMOTE_CQ_DATA) {
+				parent->comp_flags |= FI_REMOTE_CQ_DATA;
+				parent->received_data = comp->data;
+			}
+			if (recv->hdr.subop == MRAIL_SUBOP_STRIPING_START)
+				parent->hdr.tag = recv->hdr.tag;
+			free(recv);
+			if (parent->pending_stripes) {
+				ret = 0;
+				goto exit;
+			}
+			recv = parent;
+			comp->len = recv->received_bytes + sizeof(struct mrail_pkt);
+			comp->data = recv->received_data;
+		}
+
 		ret =  mrail_cq_write_recv_comp(recv->ep, &recv->hdr, comp,
 						recv);
 		mrail_push_recv(recv);
@@ -267,9 +362,7 @@ static int mrail_handle_recv_completion(struct fi_cq_tagged_entry *comp,
 	if (seq_no == peer_info->expected_seq_no) {
 		/* This message was received in order */
 		peer_info->expected_seq_no++;
-		/* Requesting FI_AV_TABLE from the underlying provider allows
-		 * us to use src_addr as an int here. */
-		recv = mrail_match_recv(mrail_ep, comp, (int) src_addr);
+		recv = mrail_match_recv(mrail_ep, comp, peer_info);
 		ofi_ep_lock_release(&mrail_ep->util_ep);
 
 		if (recv) {
@@ -332,7 +425,8 @@ static struct fi_ops_cq mrail_cq_ops = {
 	.strerror = fi_no_cq_strerror,
 };
 
-static void mrail_handle_rma_completion(struct util_cq *cq,
+static void mrail_handle_rma_completion(
+		struct util_cq *cq,
 		struct fi_cq_tagged_entry *comp)
 {
 	int ret;
@@ -359,6 +453,30 @@ static void mrail_handle_rma_completion(struct util_cq *cq,
 		else
 			ofi_ep_rd_cntr_inc(&req->mrail_ep->util_ep);
 
+		mrail_free_req(req->mrail_ep, req);
+	}
+}
+
+static void mrail_handle_striping_send_completion(
+		struct util_cq *cq,
+		struct mrail_tx_buf *tx_buf)
+{
+	int ret;
+	struct mrail_req *req;
+	struct mrail_subreq *subreq;
+
+	subreq = container_of(tx_buf, struct mrail_subreq, tx_buf);
+	req = subreq->parent;
+
+	if (ofi_atomic_dec32(&req->expected_subcomps) == 0) {
+		ofi_ep_tx_cntr_inc(&req->mrail_ep->util_ep);
+		if (tx_buf->flags & FI_COMPLETION) {
+			ret = ofi_cq_write(cq, req->comp.op_context,
+					   req->comp.flags, 0, NULL, 0, 0);
+			if (ret)
+				FI_WARN(&mrail_prov, FI_LOG_CQ,
+					"Unable to write to util cq\n");
+		}
 		mrail_free_req(req->mrail_ep, req);
 	}
 }
@@ -398,6 +516,11 @@ void mrail_poll_cq(struct util_cq *cq)
 		} else if (comp.flags & FI_SEND) {
 			tx_buf = comp.op_context;
 
+			if (tx_buf->hdr.subop) {
+				mrail_handle_striping_send_completion(cq, tx_buf);
+				goto next;
+			}
+
 			ofi_ep_tx_cntr_inc(&tx_buf->ep->util_ep);
 
 			if (tx_buf->flags & FI_COMPLETION) {
@@ -425,6 +548,7 @@ void mrail_poll_cq(struct util_cq *cq)
 				"Unsupported completion flag\n");
 		}
 
+next:
 		last_succ_rail = idx;
 		if (mrail_config[0].policy == MRAIL_POLICY_FIXED)
 			break;

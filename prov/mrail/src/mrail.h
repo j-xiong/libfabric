@@ -121,20 +121,29 @@ mrail_match_recv_handle_unexp(struct mrail_recv_queue *recv_queue, uint64_t tag,
 			      uint64_t addr, char *data, size_t len, void *context);
 
 /* mrail protocol */
-#define MRAIL_HDR_VERSION 1
+#define MRAIL_HDR_VERSION 2
+
+#define MRAIL_SUBOP_NONE		0
+#define MRAIL_SUBOP_STRIPING_START	1
+#define MRAIL_SUBOP_STRIPING_CONTINUE	2
 
 struct mrail_hdr {
 	uint8_t		version;
 	uint8_t		op;
-	uint8_t		padding[2];
+	uint8_t		subop;
+	uint8_t		num_stripes;
 	uint32_t	seq;
-	uint64_t 	tag;
+	union {
+		uint64_t 	tag;		/* when subop == 0,1 */
+		uint64_t	offset;		/* when subop == 2 */
+	};
 };
 
 struct mrail_tx_buf {
 	/* context should stay at top and would get overwritten on
 	 * util buf release */
 	void			*context;
+	uint64_t		mrail_context;
 	struct mrail_ep		*ep;
 	/* flags would be used for both operation flags (FI_COMPLETION)
 	 * and completion flags (FI_MSG, FI_TAGGED, etc) */
@@ -169,6 +178,10 @@ struct mrail_recv {
 	fi_addr_t 		addr;
 	uint64_t 		tag;
 	uint64_t 		ignore;
+	struct mrail_recv	*parent;	/* for striping recv */
+	uint8_t			pending_stripes;/* for striping recv */
+	uint64_t		received_bytes;	/* for striping recv */
+	uint64_t		received_data;	/* for striping recv */
 };
 DECLARE_FREESTACK(struct mrail_recv, mrail_recv_fs);
 
@@ -202,6 +215,7 @@ struct mrail_peer_info {
 	fi_addr_t	addr;
 	uint32_t	seq_no;
 	uint32_t	expected_seq_no;
+	struct mrail_recv *striping_recv;
 };
 
 struct mrail_ooo_recv {
@@ -342,12 +356,14 @@ static inline size_t mrail_get_tx_rail(struct mrail_ep *mrail_ep, int policy)
 
 struct mrail_subreq {
 	struct fi_context context;
+	uint64_t mrail_context;
 	struct mrail_req *parent;
 	void *descs[MRAIL_IOV_LIMIT];
 	struct iovec iov[MRAIL_IOV_LIMIT];
 	struct fi_rma_iov rma_iov[MRAIL_IOV_LIMIT];
 	size_t iov_count;
 	size_t rma_iov_count;
+	struct mrail_tx_buf tx_buf; /* for send */
 };
 
 struct mrail_req {
@@ -393,3 +409,12 @@ static inline void mrail_cntr_incerr(struct util_cntr *cntr)
                cntr->cntr_fid.ops->adderr(&cntr->cntr_fid, 1);
        }
 }
+
+ssize_t mrail_post_send_striping(
+		struct fid_ep *ep_fid, uint8_t op, const struct iovec *iov,
+		void **desc, size_t count, size_t len, fi_addr_t dest_addr,
+		uint64_t tag, uint64_t data, void *context, uint64_t flags);
+
+ssize_t mrail_post_rma_striping(
+		struct fid_ep *ep_fid, const struct fi_msg_rma *msg,
+		uint64_t flags, int op_type);

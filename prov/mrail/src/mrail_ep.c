@@ -225,6 +225,8 @@ mrail_recv_common(struct mrail_ep *mrail_ep, struct mrail_recv_queue *recv_queue
 	recv->addr	 	= src_addr;
 	recv->tag 		= tag;
 	recv->ignore 		= ignore;
+	recv->parent		= NULL;
+	recv->pending_stripes	= 0;
 
 	memcpy(&recv->iov[1], iov, sizeof(*iov) * count);
 
@@ -352,6 +354,11 @@ mrail_send_common(struct fid_ep *ep_fid, const struct iovec *iov, void **desc,
 	struct fi_msg msg;
 	ssize_t ret;
 
+	if (policy == MRAIL_POLICY_STRIPING)
+		return mrail_post_send_striping(ep_fid, ofi_op_msg, iov,
+						desc, count, len, dest_addr,
+						0ULL, data, context, flags);
+
 	peer_info = ofi_av_get_addr(mrail_ep->util_ep.av, (int) dest_addr);
 
 	ofi_ep_lock_acquire(&mrail_ep->util_ep);
@@ -411,6 +418,11 @@ mrail_tsend_common(struct fid_ep *ep_fid, const struct iovec *iov, void **desc,
 	uint32_t rail = mrail_get_tx_rail(mrail_ep, policy);
 	struct fi_msg msg;
 	ssize_t ret;
+
+	if (policy == MRAIL_POLICY_STRIPING)
+		return mrail_post_send_striping(ep_fid, ofi_op_tagged, iov,
+						desc, count, len, dest_addr,
+						tag, data, context, flags);
 
 	peer_info = ofi_av_get_addr(mrail_ep->util_ep.av, (int) dest_addr);
 
@@ -558,6 +570,111 @@ static ssize_t mrail_tinjectdata(struct fid_ep *ep_fid, const void *buf,
 	return mrail_tsend_common(ep_fid, &iov, NULL, 1, len, dest_addr, tag,
 				  data, NULL, (mrail_inject_flags(ep_fid) |
 					       FI_REMOTE_CQ_DATA));
+}
+
+static ssize_t mrail_ep_post_rma(struct fid_ep *ep_fid,
+		const struct fi_msg_rma *msg, uint64_t flags, int op_type)
+{
+	/* TODO: don't stripe for small RMA */
+	return mrail_post_rma_striping(ep_fid, msg, flags, op_type);
+}
+
+static ssize_t mrail_ep_readmsg(struct fid_ep *ep_fid,
+		const struct fi_msg_rma *msg, uint64_t flags)
+{
+	return mrail_ep_post_rma(ep_fid, msg, flags, FI_READ);
+}
+
+/* TODO: separate the different operations to optimize performance */
+static ssize_t mrail_ep_read(struct fid_ep *ep_fid, void *buf, size_t len,
+		void *desc, fi_addr_t src_addr, uint64_t addr,
+		uint64_t key, void *context)
+{
+	struct mrail_ep *mrail_ep;
+	struct iovec iovec = {
+		.iov_base = (void*)buf,
+		.iov_len = len
+	};
+	struct fi_rma_iov rma_iov= {
+		.addr = addr,
+		.len = len,
+		.key = key
+	};
+	struct fi_msg_rma msg = {
+		.msg_iov = &iovec,
+		.desc = &desc,
+		.iov_count = 1,
+		.addr = src_addr,
+		.rma_iov = &rma_iov,
+		.rma_iov_count = 1,
+		.context = context,
+		.data = 0
+	};
+
+	mrail_ep = container_of(ep_fid, struct mrail_ep, util_ep.ep_fid.fid);
+
+	return mrail_ep_readmsg(ep_fid, &msg, mrail_ep->util_ep.tx_op_flags);
+}
+
+static ssize_t mrail_ep_writemsg(struct fid_ep *ep_fid,
+		const struct fi_msg_rma *msg, uint64_t flags)
+{
+	return mrail_ep_post_rma(ep_fid, msg, flags, FI_WRITE);
+}
+
+static ssize_t mrail_ep_write(struct fid_ep *ep_fid, const void *buf,
+		size_t len, void *desc, fi_addr_t dest_addr, uint64_t addr,
+		uint64_t key, void *context)
+{
+	struct mrail_ep *mrail_ep;
+	struct iovec iovec = {
+		.iov_base = (void*)buf,
+		.iov_len = len
+	};
+	struct fi_rma_iov rma_iov= {
+		.addr = addr,
+		.len = len,
+		.key = key
+	};
+	struct fi_msg_rma msg = {
+		.msg_iov = &iovec,
+		.desc = &desc,
+		.iov_count = 1,
+		.addr = dest_addr,
+		.rma_iov = &rma_iov,
+		.rma_iov_count = 1,
+		.context = context,
+		.data = 0
+	};
+
+	mrail_ep = container_of(ep_fid, struct mrail_ep, util_ep.ep_fid.fid);
+
+	return mrail_ep_writemsg(ep_fid, &msg, mrail_ep->util_ep.tx_op_flags);
+}
+
+static ssize_t mrail_ep_inject_write(struct fid_ep *ep_fid, const void *buf,
+		size_t len, fi_addr_t dest_addr, uint64_t addr, uint64_t key)
+{
+	struct mrail_ep *mrail_ep;
+	struct mrail_addr_key *mr_map;
+	uint32_t rail;
+	ssize_t ret;
+
+	mrail_ep = container_of(ep_fid, struct mrail_ep, util_ep.ep_fid.fid);
+	mr_map = (struct mrail_addr_key *) key;
+
+	rail = mrail_get_tx_rail_rr(mrail_ep);
+	ret = fi_inject_write(mrail_ep->rails[rail].ep, buf, len,
+			      dest_addr, addr, mr_map[rail].key);
+	if (ret) {
+		FI_WARN(&mrail_prov, FI_LOG_EP_DATA,
+			"Unable to post inject write on rail: %" PRIu32 "\n",
+			rail);
+		return ret;
+	}
+	ofi_ep_wr_cntr_inc(&mrail_ep->util_ep);
+
+	return 0;
 }
 
 static struct mrail_unexp_msg_entry *
@@ -857,6 +974,19 @@ struct fi_ops_tagged mrail_ops_tagged = {
 	.inject = mrail_tinject,
 	.senddata = mrail_tsenddata,
 	.injectdata = mrail_tinjectdata,
+};
+
+struct fi_ops_rma mrail_ops_rma = {
+	.size = sizeof (struct fi_ops_rma),
+	.read = mrail_ep_read,
+	.readv = fi_no_rma_readv,
+	.readmsg = mrail_ep_readmsg,
+	.write = mrail_ep_write,
+	.writev = fi_no_rma_writev,
+	.writemsg = mrail_ep_writemsg,
+	.inject = mrail_ep_inject_write,
+	.writedata = fi_no_rma_writedata,
+	.injectdata = fi_no_rma_injectdata,
 };
 
 void mrail_ep_progress(struct util_ep *ep)
