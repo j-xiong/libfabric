@@ -59,6 +59,7 @@ struct psmx2_env psmx2_env = {
 #if (PSMX2_TAG_LAYOUT == PSMX2_TAG_LAYOUT_RUNTIME)
 	.tag_layout	= "auto",
 #endif
+	.nic_info	= 0,
 };
 
 #if (PSMX2_TAG_LAYOUT == PSMX2_TAG_LAYOUT_RUNTIME)
@@ -89,6 +90,7 @@ static void psmx2_init_env(void)
 #if (PSMX2_TAG_LAYOUT == PSMX2_TAG_LAYOUT_RUNTIME)
 	fi_param_get_str(&psmx2_prov, "tag_layout", &psmx2_env.tag_layout);
 #endif
+	fi_param_get_bool(&psmx2_prov, "nic_info", &psmx2_env.nic_info);
 }
 
 void psmx2_init_tag_layout(struct fi_info *info)
@@ -251,8 +253,8 @@ out:
 	return ret;
 }
 
-#if !HAVE_PSM2_INFO_QUERY
 #define PSMX2_SYSFS_PATH "/sys/class/infiniband/hfi1"
+#if !HAVE_PSM2_INFO_QUERY
 static int psmx2_read_sysfs_int(int unit, char *entry)
 {
 	char path[64];
@@ -332,6 +334,9 @@ static void psmx2_update_hfi_info(void)
 			continue;
 		}
 
+		if (psmx2_num_active_units && psmx2_env.nic_info)
+			goto save_active_units;
+
 		if (PSM2_OK != psm2_info_query(PSM2_INFO_QUERY_NUM_FREE_CONTEXTS,
 						&tmp_cnt, 1, args) || (tmp_cnt < 0))
 		{
@@ -365,9 +370,13 @@ static void psmx2_update_hfi_info(void)
 			continue;
 		}
 
+		if (psmx2_num_active_units && psmx2_env.nic_info)
+			goto save_active_units;
+
 		nctxts += psmx2_read_sysfs_int(i, "nctxts");
 		nfreectxts += psmx2_read_sysfs_int(i, "nfreectxts");
 #endif
+save_active_units:
 		psmx2_active_units[psmx2_num_active_units++] = i;
 
 		if (multirail)
@@ -397,6 +406,82 @@ int psmx2_get_round_robin_unit(int idx)
 	return psmx2_num_active_units ?
 			psmx2_active_units[idx % psmx2_num_active_units] :
 			-1;
+}
+
+static void psmx2_update_hfi_nic_info(struct fi_info *info, int unit)
+{
+        char *path;
+	char buffer[80];
+	char *s;
+	ssize_t n;
+	int a, b, c, d;
+
+	if (!info->nic) {
+		info->nic = ofi_nic_dup(NULL);
+		if (!info->nic)
+			goto err_out;
+	}
+
+        if (asprintf(&path, "%s_%d/%s", PSMX2_SYSFS_PATH, unit, "device") < 0)
+                goto err_out;
+
+	n = readlink(path, buffer, 80);
+	free(path);
+
+	if (n < 0)
+		goto err_out;
+
+	buffer[n] = '\0';
+	if ((s = strrchr(buffer, '/')))
+		s++;
+	else
+		s = buffer;
+
+	n = sscanf(s, "%x:%x:%x.%x", &a, &b, &c, &d);
+	if (n < 4)
+		goto err_out;
+
+	info->nic->bus_attr->bus_type = FI_BUS_PCI;
+	info->nic->bus_attr->attr.pci.domain_id = a;
+	info->nic->bus_attr->attr.pci.bus_id = b;
+	info->nic->bus_attr->attr.pci.device_id = c;
+	info->nic->bus_attr->attr.pci.function_id = d;
+	((struct psmx2_ep_name *)info->src_addr)->unit = unit;
+	return;
+
+err_out:
+	FI_WARN(&psmx2_prov, FI_LOG_CORE,
+		"Failed to read nic info for HFI unit %d\n", unit);
+	return;
+}
+
+static void psmx2_add_nic_info(struct fi_info *info)
+{
+	struct fi_info *p, *next;
+	int i;
+
+	if (!info)
+		return;
+
+	p = info;
+	while (p) {
+		next = p->next;
+		for (i = 0; i < psmx2_num_active_units; i++) {
+			if (i > 0) {
+				p->next = fi_dupinfo(p);
+				if (!p->next) {
+					FI_WARN(&psmx2_prov, FI_LOG_CORE,
+						"Failed to duplicate info for HFI unit %d\n",
+						psmx2_active_units[i]);
+					break;
+				}
+				p = p->next;
+			}
+			psmx2_update_hfi_nic_info(p, psmx2_active_units[i]);
+		}
+		p->next = next;
+		p = next;
+	}
 }
 
 static int psmx2_getinfo(uint32_t api_version, const char *node,
@@ -522,6 +607,10 @@ static int psmx2_getinfo(uint32_t api_version, const char *node,
 
 	/* Apply hints to the prov info */
 	psmx2_alter_prov_info(api_version, hints, prov_info);
+
+	if (psmx2_env.nic_info)
+		psmx2_add_nic_info(prov_info);
+
 	*info = prov_info;
 	return 0;
 
@@ -623,6 +712,9 @@ PROVIDER_INI
 			"tag60 means 32/4/60 for data/flags/tag;"
 			"tag64 means 4/28/64 for flags/data/tag (default: tag60).");
 #endif
+
+	fi_param_define(&psmx2_prov, "nic_info", FI_PARAM_BOOL,
+			"Whether to return fi_nic data from fi_getinfo (default: no).");
 
 	psmx2_init_env();
 

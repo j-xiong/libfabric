@@ -837,6 +837,7 @@ struct psmx2_env {
 #if (PSMX2_TAG_LAYOUT == PSMX2_TAG_LAYOUT_RUNTIME)
 	char	*tag_layout;
 #endif
+	int	nic_info;
 };
 
 extern struct fi_ops_mr		psmx2_mr_ops;

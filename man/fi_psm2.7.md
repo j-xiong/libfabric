@@ -256,6 +256,16 @@ The *psm2* provider checks for the following environment variables:
   to 1 (means *tag60*) or 2 (means *tag64*), the choice is fixed at compile time
   and this runtime option will be disabled.
 
+*FI_PSM2_NIC_INFO*
+: When this option is set to 1, the *fi_info* structure returned from *fi_getinfo*
+  will have non-NULL *nic* field, with the *bus_attr->attr.pci" sub-field set.
+  Application can then manually choose which NIC to use by using the correct
+  fi_info structure. When this option is set to 0, the *fi_info* structure will
+  have NULL *nic* field, and the provider automatically allocates resource across
+  all active NICs.
+
+  The default setting is 0.
+
 # SEE ALSO
 
 [`fabric`(7)](fabric.7.html),
