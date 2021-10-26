@@ -7,7 +7,7 @@ tagline: Libfabric Programmer's Manual
 
 # NAME
 
-fi_version \- Version of the library interfaces
+fi_version \- Version of the library interfaces XXX
 
 # SYNOPSIS
 
