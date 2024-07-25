@@ -7,7 +7,7 @@ version 1.0.  New major releases include all fixes from minor
 releases with earlier release dates.
 
 v1.22.0, Fri Jul 26, 2024
-========================
+=========================
 
 ## Core
 
